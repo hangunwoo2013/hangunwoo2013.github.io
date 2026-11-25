@@ -1,0 +1,133 @@
+name: Deploy B-ROUTE (Cloud Run)
+
+on:
+  push:
+    branches: [beta, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    # Disabled by default. The owner explicitly enables this GitHub variable.
+    # A beta deployment needs BETA_DEPLOY_APPROVED=true.
+    # Production additionally needs PROD_DEPLOY_APPROVED=true.
+    if: >-
+      ${{
+        vars.GCP_DEPLOY_ENABLED == 'true' &&
+        ((github.ref_name == 'beta' && vars.BETA_DEPLOY_APPROVED == 'true') ||
+         (github.ref_name == 'main' && vars.PROD_DEPLOY_APPROVED == 'true'))
+      }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'beta' && 'beta' || 'production' }}
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'asia-northeast3' }}
+      AR_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY || 'broute' }}
+      SERVICE: ${{ github.ref_name == 'beta' && (vars.GCP_BETA_SERVICE || 'broute-beta') || (vars.GCP_PROD_SERVICE || 'broute-prod') }}
+      PUBLIC_ORIGIN: ${{ github.ref_name == 'beta' && vars.BETA_APP_ORIGIN || vars.PROD_APP_ORIGIN }}
+      GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      GOOGLE_ADMIN_SUB: ${{ vars.GOOGLE_ADMIN_SUB }}
+      GOOGLE_ADMIN_EMAIL: ${{ vars.GOOGLE_ADMIN_EMAIL }}
+      NAVER_CLIENT_ID: ${{ vars.NAVER_CLIENT_ID }}
+      NAVER_REDIRECT_URI_CONFIG: ${{ vars.NAVER_REDIRECT_URI }}
+      MICROSOFT_CLIENT_ID: ${{ vars.MICROSOFT_CLIENT_ID }}
+      MICROSOFT_TENANT: ${{ vars.MICROSOFT_TENANT || 'common' }}
+      MICROSOFT_REDIRECT_URI_CONFIG: ${{ vars.MICROSOFT_REDIRECT_URI }}
+      TAGO_TRAIN_SERVICE_NAME: ${{ vars.TAGO_TRAIN_SERVICE_NAME || 'TrainInfo' }}
+      BETA_RELEASE_APPROVED: ${{ vars.BETA_RELEASE_APPROVED || 'false' }}
+      APP_VERSION: ${{ github.ref_name == 'beta' && '2.0.0-beta.1' || '2.0.0' }}
+      BETA_PUBLIC_ACCESS_APPROVED: ${{ vars.BETA_PUBLIC_ACCESS_APPROVED || 'false' }}
+      OPTIONAL_NAVER_SECRET_NAME: ${{ vars.NAVER_CLIENT_SECRET_NAME }}
+      OPTIONAL_MICROSOFT_SECRET_NAME: ${{ vars.MICROSOFT_CLIENT_SECRET_NAME }}
+      OPTIONAL_COS_SECRET_ID_NAME: ${{ vars.COS_SECRET_ID_NAME }}
+      OPTIONAL_COS_SECRET_KEY_NAME: ${{ vars.COS_SECRET_KEY_NAME }}
+      OPTIONAL_COS_BUCKET_NAME: ${{ vars.COS_BUCKET_NAME }}
+      OPTIONAL_COS_REGION_NAME: ${{ vars.COS_REGION_NAME }}
+      OPTIONAL_COS_SESSION_TOKEN_NAME: ${{ vars.COS_SESSION_TOKEN_NAME }}
+      OPTIONAL_KAKAO_SECRET_NAME: ${{ vars.KAKAO_REST_API_KEY_NAME }}
+      OPTIONAL_RESEND_API_KEY_NAME: ${{ vars.RESEND_API_KEY_SECRET_NAME }}
+      OPTIONAL_RESEND_WEBHOOK_SECRET_NAME: ${{ vars.RESEND_WEBHOOK_SECRET_NAME }}
+      OPTIONAL_INVITE_FROM_EMAIL_SECRET_NAME: ${{ vars.INVITE_FROM_EMAIL_SECRET_NAME }}
+      INVITE_REPLY_TO_EMAIL: ${{ vars.INVITE_REPLY_TO_EMAIL || 'broute.site.app@gmail.com' }}
+      INVITE_FROM_NAME: ${{ vars.INVITE_FROM_NAME || 'B-ROUTE' }}
+      INVITE_EMAIL_DAILY_LIMIT: ${{ vars.INVITE_EMAIL_DAILY_LIMIT || '80' }}
+      RESEND_WEBHOOK_TOLERANCE_SECONDS: ${{ vars.RESEND_WEBHOOK_TOLERANCE_SECONDS || '300' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Authenticate using Workload Identity Federation
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+      - name: Build and push application container
+        run: |
+          set -euo pipefail
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${SERVICE}:${GITHUB_SHA}"
+          docker build --platform linux/amd64 -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - name: Deploy stable Cloud Run service
+        env:
+          OPTIONAL_DATA_KEY_NAME: ${{ vars.DATA_GO_KR_SERVICE_KEY_NAME || 'DATA_GO_KR_SERVICE_KEY' }}
+          OPTIONAL_DB_SECRET_NAME: ${{ vars.DATABASE_URL_SECRET_NAME || 'DATABASE_URL' }}
+          OPTIONAL_SESSION_SECRET_NAME: ${{ vars.SESSION_SECRET_NAME || 'SESSION_SECRET' }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIC_ORIGIN"
+          NAVER_REDIRECT_URI="${NAVER_REDIRECT_URI_CONFIG:-${PUBLIC_ORIGIN}/api/auth/naver/callback}"
+          MICROSOFT_REDIRECT_URI="${MICROSOFT_REDIRECT_URI_CONFIG:-${PUBLIC_ORIGIN}/api/auth/microsoft/callback}"
+          ENV_VARS="APP_ENV=production,APP_VERSION=${APP_VERSION},APP_ORIGIN=${PUBLIC_ORIGIN},APP_TIMEZONE=Asia/Seoul,DATA_DIR=/tmp/broute-data,GTFS_STAGING_PART_SIZE_MB=16,BETA_RELEASE_APPROVED=${BETA_RELEASE_APPROVED},INVITE_REPLY_TO_EMAIL=${INVITE_REPLY_TO_EMAIL},INVITE_FROM_NAME=${INVITE_FROM_NAME},INVITE_EMAIL_DAILY_LIMIT=${INVITE_EMAIL_DAILY_LIMIT},RESEND_WEBHOOK_TOLERANCE_SECONDS=${RESEND_WEBHOOK_TOLERANCE_SECONDS},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID},GOOGLE_ADMIN_SUB=${GOOGLE_ADMIN_SUB},GOOGLE_ADMIN_EMAIL=${GOOGLE_ADMIN_EMAIL},NAVER_CLIENT_ID=${NAVER_CLIENT_ID},NAVER_REDIRECT_URI=${NAVER_REDIRECT_URI},MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID},MICROSOFT_TENANT=${MICROSOFT_TENANT},MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI},TAGO_TRAIN_SERVICE_NAME=${TAGO_TRAIN_SERVICE_NAME}"
+          SECRET_ARGS="${OPTIONAL_DB_SECRET_NAME}=DATABASE_URL:latest,${OPTIONAL_SESSION_SECRET_NAME}=SESSION_SECRET:latest,${OPTIONAL_DATA_KEY_NAME}=DATA_GO_KR_SERVICE_KEY:latest"
+          add_optional_secret() {
+            local secret_name="$1" env_name="$2"
+            if [[ -n "$secret_name" ]]; then SECRET_ARGS+=" ,${env_name}=${secret_name}:latest"; fi
+          }
+          add_optional_secret "$OPTIONAL_NAVER_SECRET_NAME" "NAVER_CLIENT_SECRET"
+          add_optional_secret "$OPTIONAL_MICROSOFT_SECRET_NAME" "MICROSOFT_CLIENT_SECRET"
+          add_optional_secret "$OPTIONAL_COS_SECRET_ID_NAME" "COS_SECRET_ID"
+          add_optional_secret "$OPTIONAL_COS_SECRET_KEY_NAME" "COS_SECRET_KEY"
+          add_optional_secret "$OPTIONAL_COS_BUCKET_NAME" "COS_BUCKET"
+          add_optional_secret "$OPTIONAL_COS_REGION_NAME" "COS_REGION"
+          add_optional_secret "$OPTIONAL_COS_SESSION_TOKEN_NAME" "COS_SESSION_TOKEN"
+          add_optional_secret "$OPTIONAL_KAKAO_SECRET_NAME" "KAKAO_REST_API_KEY"
+          add_optional_secret "$OPTIONAL_RESEND_API_KEY_NAME" "RESEND_API_KEY"
+          add_optional_secret "$OPTIONAL_RESEND_WEBHOOK_SECRET_NAME" "RESEND_WEBHOOK_SECRET"
+          add_optional_secret "$OPTIONAL_INVITE_FROM_EMAIL_SECRET_NAME" "INVITE_FROM_EMAIL"
+          SECRET_ARGS="${SECRET_ARGS// ,/,}"
+          ACCESS_ARGS=(--allow-unauthenticated)
+          if [[ "$GITHUB_REF_NAME" == "beta" && "$BETA_PUBLIC_ACCESS_APPROVED" != "true" ]]; then
+            # Closed-beta default: Cloud Run IAM blocks anonymous visitors.
+            # Add roles/run.invoker only for approved testers, or explicitly approve public access.
+            ACCESS_ARGS=(--no-allow-unauthenticated)
+          fi
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE" \
+            --project "$PROJECT_ID" \
+            --region "$REGION" \
+            --platform managed \
+            "${ACCESS_ARGS[@]}" \
+            --port 8080 \
+            --cpu 1 \
+            --memory 1Gi \
+            --concurrency 40 \
+            --min 0 \
+            --max 1 \
+            --timeout 60 \
+            --update-env-vars "$ENV_VARS" \
+            --update-secrets "$SECRET_ARGS"
+      - name: Build and push GTFS worker image (explicit opt-in)
+        if: vars.GTFS_WORKER_IMAGE_BUILD_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/${SERVICE}-gtfs-worker:${GITHUB_SHA}"
+          docker build --platform linux/amd64 -f workers/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "GTFS_WORKER_IMAGE=$IMAGE" >> "$GITHUB_ENV"

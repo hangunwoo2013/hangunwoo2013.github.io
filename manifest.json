@@ -1,0 +1,19 @@
+{
+  "name": "B-ROUTE 대중교통 여행 플래너",
+  "short_name": "B-ROUTE",
+  "description": "B-ROUTE 2.0.0-beta.1 · 버스·철도와 여러 경유지로 만드는 대중교통 경로 플래너 · 비공개 베타 후보",
+  "lang": "ko-KR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f6fa",
+  "theme_color": "#12243b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

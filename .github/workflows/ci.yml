@@ -1,0 +1,40 @@
+name: B-ROUTE CI
+
+on:
+  # CI runs on every development branch, including 1.9x feature branches.
+  # This workflow only tests/builds; it never deploys.
+  push:
+  pull_request:
+    branches: [develop, beta, main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            cloud-functions/requirements.txt
+            requirements-ci.txt
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install backend and CI dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r cloud-functions/requirements.txt -r requirements-ci.txt
+      - name: Run deterministic local regression suite
+        run: python -m pytest -q
+      - name: Build application container
+        run: docker build --platform linux/amd64 -t broute-app:ci .
+      - name: Build GTFS worker container
+        run: docker build --platform linux/amd64 -f workers/Dockerfile -t broute-gtfs-worker:ci .

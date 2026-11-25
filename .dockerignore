@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+*.zip
+*.log
+*.md
+tests
+scripts
+requirements-ci.txt
+pytest.ini
