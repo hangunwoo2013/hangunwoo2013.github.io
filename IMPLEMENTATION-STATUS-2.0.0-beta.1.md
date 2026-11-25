@@ -1,39 +1,34 @@
 # B-ROUTE 2.0.0-beta.1 구현 현황
 
-## 패키지 요약
+## 패키지 상태
 - 기준: B-ROUTE 1.95.1 Email Delivery Hotfix
-- 채널: `private-beta-candidate`
+- 채널: `private-beta-test`
 - 버전: `2.0.0-beta.1`
-- 실제 배포: 하지 않음
-- 베타 승인 게이트: 기본 `false`
-- 익명 Cloud Run 접근: beta branch 기본 차단
+- 목적: 정식 공개 전 비공개 테스터 피드백을 받는 2.0 Beta Test 단계의 기준 빌드
+- 실제 외부 API 호출/배포: 이번 검증에서는 하지 않음
+- 코드 수준 로컬 검사: 통과
 
-## 이번 버전에서 추가/정리한 점
-- 웹·API·관리자·manifest·service worker 버전 표기를 2.0.0-beta.1로 맞춤.
-- GTFS Worker heartbeat는 API의 런타임 버전을 사용해 불일치했던 1.94.0 하드코딩을 제거.
-- UI에 후보 버전과 시간표 데이터 범위 제한을 표시.
-- beta 배포 시 익명 접근은 기본 비활성화하고, 승인된 테스터를 위한 Cloud Run Invoker 권한을 요구.
-- 베타 승인/배포/공개 접근은 각각 별도 설정값으로 분리.
+## 이번에 정리한 항목
+- 웹/API/관리자/manifest/service worker/GTFS Worker의 버전 표기를 `2.0.0-beta.1`로 정렬.
+- GTFS Worker heartbeat는 API 런타임 버전을 사용.
+- 베타 후보 표시 및 데이터 범위 안내.
+- beta 배포 승인 및 익명 접근 제어는 기본 비활성화 상태 유지.
+- 회귀 실행기의 하위 프로세스 `PYTHONPATH`에 프로젝트 루트와 API 디렉터리를 모두 포함해 테스트 실행 위치 의존 문제 수정.
+- 2.0 Beta Test의 목표를 실 공개 전 피드백 단계로 문서에 명확히 반영.
 
-## 검증된 범위
-- 로컬 pytest 및 10개 독립 회귀 시나리오
-- Python 구문/런타임 모듈 import
-- Node 기반 HTML inline JS와 service worker 구문 검사(회귀 runner)
-- HTML id/reference 검사
-- GitHub Actions workflow YAML 및 내장 Bash 문법 검사
-- API/웹/관리자/manifest/service worker 기본 HTTP smoke test
-- dotfile 및 서버 소스 정적 파일 노출 차단 smoke test
-- GTFS Worker heartbeat 버전 일치 회귀검사
-- beta release/deploy/public access gate 정적 검사
+## 확인된 검사
+- pytest 1건 통과
+- 10개 독립 회귀 시나리오 통과, 연속 반복 검사 통과
+- Python/JavaScript 구문 및 Python 3.11 문법 검사
+- HTML ID 및 JavaScript DOM 참조 검사
+- GitHub Actions YAML/Bash 검사
+- TestClient 기반 웹/API 통합 및 권한·경로·모의 교통 API 회귀
+- ZIP 무결성
 
-## 미검증 / 차단 항목
-- GitHub 원격 CI 및 실제 Docker image build
-- Google/Naver/Microsoft 실계정 OAuth
-- Resend DNS 인증, 실발송, 실 webhook 전달
-- 운영 PostgreSQL, backup/restore, COS 실제 업로드·다운로드
-- 전국 지역별 버스/철도 GTFS 수집 범위, 라이선스, 실제 시간표 경로 정확성
-- GTFS Worker Cloud Run Job 배포/스케줄/권한/재시도
-- 실제 모바일/PC 기기 및 외부 테스터 테스트
-- Cloud Run 비용 경보와 결제 한도 정책
+## 2.0 Beta Test 단계에서 시작할 작업
+- 실제 공공 교통 API 연결 및 상품별 승인/응답 확인
+- 실제 GTFS 전국 데이터 범위·라이선스·시간표 검토
+- 실계정 OAuth, 이메일, PostgreSQL, COS 연동
+- 별도 비공개 베타 환경 구성 및 초대 테스터 피드백 반영
 
-따라서 `2.0.0-beta.1`은 후보 코드 패키지이며, 외부 테스터에게 전국 경로 검색이 가능한 서비스로 안내하거나 공개 배포하면 안 된다.
+위 외부 연결/운영 항목은 이번 로컬 검증에서 확인하지 않았으며 실패로 집계하지 않습니다. 실제 전국 경로검색 완성 또는 운영 안정성이 이미 검증되었다는 뜻도 아닙니다.

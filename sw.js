@@ -1,5 +1,5 @@
-const CACHE_NAME = 'broute-shell-2-0-beta-1';
-const SHELL = ['/', '/manifest.json', '/icon.svg'];
+const CACHE_NAME = 'broute-shell-2-0-beta-2';
+const SHELL = ['/', '/manifest.json', '/icon.svg', '/broute-config.js'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
@@ -10,7 +10,7 @@ self.addEventListener('fetch', event => {
   const req = event.request;
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
-  if (url.pathname === '/config.js') {
+  if (url.pathname === '/broute-config.js') {
     event.respondWith(fetch(req).then(res => { caches.open(CACHE_NAME).then(cache => cache.put(req, res.clone())); return res; }).catch(() => caches.match(req)));
     return;
   }

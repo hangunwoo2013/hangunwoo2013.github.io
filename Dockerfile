@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY cloud-functions/api /app/api
 COPY server.py /app/server.py
 RUN mkdir -p /app/public
-COPY index.html admin.html manifest.json sw.js icon.svg /app/public/
+COPY index.html admin.html manifest.json sw.js icon.svg broute-config.js /app/public/
 
 RUN chown -R app:app /app
 USER app

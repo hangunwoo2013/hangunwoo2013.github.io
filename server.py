@@ -27,7 +27,7 @@ if PUBLIC_DIR.is_dir():
 else:
     # Local development serves only the intended web assets. Do not mount the
     # repository root as StaticFiles, because it contains .env and source files.
-    WEB_ASSETS = {"admin.html", "manifest.json", "sw.js", "icon.svg"}
+    WEB_ASSETS = {"admin.html", "manifest.json", "sw.js", "icon.svg", "broute-config.js"}
 
     @app.get("/", include_in_schema=False)
     async def web_index():

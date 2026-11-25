@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -37,7 +38,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("DATABASE_PATH", DATA_DIR / "broute.sqlite3"))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
-APP_VERSION = os.getenv("APP_VERSION", "2.0.0-beta.1").strip() or "2.0.0-beta.1"
+APP_VERSION = os.getenv("APP_VERSION", "2.0.0-beta.2").strip() or "2.0.0-beta.2"
 DB_IS_POSTGRES = DATABASE_URL.startswith(("postgresql://", "postgres://"))
 TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Seoul"))
 DATA_GO_KEY = os.getenv("DATA_GO_KR_SERVICE_KEY", "").strip()
@@ -59,6 +60,16 @@ GOOGLE_ADMIN_SUB = os.getenv("GOOGLE_ADMIN_SUB", "").strip()
 GOOGLE_ADMIN_EMAIL = os.getenv("GOOGLE_ADMIN_EMAIL", "").strip().lower()
 SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
 APP_ORIGIN = os.getenv("APP_ORIGIN", "").strip().rstrip("/")
+# Optional exact browser origins for a separately hosted frontend (for example,
+# a GitHub Pages origin). Separate entries with semicolons; never use '*'.
+APP_ALLOWED_ORIGINS = tuple(dict.fromkeys(
+    origin.strip().rstrip("/")
+    for origin in os.getenv("APP_ALLOWED_ORIGINS", "").split(";")
+    if origin.strip()
+))
+SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "lax").strip().lower()
+if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    SESSION_COOKIE_SAMESITE = "lax"
 # Transactional project invitations. The sender key is server-only; it is
 # never returned by /auth/config, /health, or administrator status endpoints.
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
@@ -96,12 +107,24 @@ GTFS_STAGING_PART_SIZE = max(8, int(os.getenv("GTFS_STAGING_PART_SIZE_MB", "16")
 GTFS_STAGING_URL_TTL = 900
 
 app = FastAPI(title="B-ROUTE API", version=APP_VERSION, description="B-ROUTE multimodal routing, collaboration and read-only sharing", lifespan=lifespan)
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(
+    origin for origin in (APP_ORIGIN, *APP_ALLOWED_ORIGINS) if origin
+))
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
+    expose_headers=["Content-Disposition"],
+    max_age=600,
+)
 
 
 @app.middleware("http")
 async def apply_security_headers(request: Request, call_next):
     response = await call_next(request)
-    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     if "/project-invites/" in request.url.path:
         response.headers["Cache-Control"] = "no-store, max-age=0"
@@ -432,7 +455,7 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_gtfs_staging_status_created ON gtfs_staging_uploads(status,created_at);
         CREATE TABLE IF NOT EXISTS gtfs_worker_heartbeats (
           worker_id TEXT PRIMARY KEY, status TEXT NOT NULL, last_seen TEXT NOT NULL,
-          version TEXT NOT NULL DEFAULT '2.0.0-beta.1', last_error TEXT NOT NULL DEFAULT ''
+          version TEXT NOT NULL DEFAULT '2.0.0-beta.2', last_error TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_gtfs_worker_heartbeat_seen ON gtfs_worker_heartbeats(last_seen);
         """)
@@ -760,14 +783,14 @@ def _require_same_origin(request: Request) -> None:
     origin = request.headers.get("origin", "").rstrip("/")
     if not origin:
         raise HTTPException(403, "요청 출처를 확인할 수 없습니다.")
-    expected = APP_ORIGIN
-    if not expected and os.getenv("APP_ENV", "").lower() == "production":
-        raise HTTPException(503, "운영 환경의 APP_ORIGIN 설정이 필요합니다.")
-    if not expected:
+    allowed = set(CORS_ALLOWED_ORIGINS)
+    if not allowed:
+        if os.getenv("APP_ENV", "").lower() == "production":
+            raise HTTPException(503, "운영 환경의 APP_ORIGIN 또는 APP_ALLOWED_ORIGINS 설정이 필요합니다.")
         host = request.headers.get("host", "")
         proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
-        expected = f"{proto}://{host}".rstrip("/")
-    if not host_origin_matches(origin, expected):
+        allowed.add(f"{proto}://{host}".rstrip("/"))
+    if not any(host_origin_matches(origin, expected) for expected in allowed):
         raise HTTPException(403, "허용되지 않은 사이트에서 보낸 요청입니다.")
 
 
@@ -778,6 +801,14 @@ def host_origin_matches(origin: str, expected: str) -> bool:
 def _cookie_secure(request: Request) -> bool:
     forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     return request.url.scheme == "https" or forwarded == "https" or os.getenv("APP_ENV", "").lower() == "production"
+
+
+def _cookie_samesite(request: Request) -> str:
+    # SameSite=None is accepted only with Secure cookies. Keep local HTTP
+    # development usable even if a developer copied the cross-site setting.
+    if SESSION_COOKIE_SAMESITE == "none" and not _cookie_secure(request):
+        return "lax"
+    return SESSION_COOKIE_SAMESITE
 
 
 def _public_user(claims: dict[str, Any]) -> dict[str, Any]:
@@ -1541,7 +1572,7 @@ async def naver_login_start(request: Request, return_to: str = "/"):
               "code_challenge_method": "S256"}
     response = RedirectResponse("https://nid.naver.com/oauth2/authorize?" + urlencode(params), status_code=302)
     response.set_cookie(OAUTH_STATE_COOKIE, _oauth_state_cookie("naver", state, nonce, verifier, return_to), max_age=600,
-                        httponly=True, secure=_cookie_secure(request), samesite="lax", path="/")
+                        httponly=True, secure=_cookie_secure(request), samesite=_cookie_samesite(request), path="/")
     return response
 
 
@@ -1582,8 +1613,8 @@ async def naver_login_callback(request: Request, code: str = "", state: str = ""
                                     False, str(profile_data.get("profile_image", "")))
     response = RedirectResponse(_oauth_success_url(request, str(state_claims.get("return_to", "/"))), status_code=303)
     response.set_cookie(SESSION_COOKIE, _session_token(claims), max_age=SESSION_TTL_SECONDS, httponly=True,
-                        secure=_cookie_secure(request), samesite="lax", path="/")
-    response.delete_cookie(OAUTH_STATE_COOKIE, path="/", httponly=True, secure=_cookie_secure(request), samesite="lax")
+                        secure=_cookie_secure(request), samesite=_cookie_samesite(request), path="/")
+    response.delete_cookie(OAUTH_STATE_COOKIE, path="/", httponly=True, secure=_cookie_secure(request), samesite=_cookie_samesite(request))
     return response
 
 
@@ -1601,7 +1632,7 @@ async def microsoft_login_start(request: Request, return_to: str = "/"):
               "code_challenge": challenge, "code_challenge_method": "S256"}
     response = RedirectResponse(str(discovery["authorization_endpoint"]) + "?" + urlencode(params), status_code=302)
     response.set_cookie(OAUTH_STATE_COOKIE, _oauth_state_cookie("microsoft", state, nonce, verifier, return_to), max_age=600,
-                        httponly=True, secure=_cookie_secure(request), samesite="lax", path="/")
+                        httponly=True, secure=_cookie_secure(request), samesite=_cookie_samesite(request), path="/")
     return response
 
 
@@ -1647,8 +1678,8 @@ async def microsoft_login_callback(request: Request, code: str = "", state: str 
                                     str(identity.get("name", "")), False, "")
     response = RedirectResponse(_oauth_success_url(request, str(state_claims.get("return_to", "/"))), status_code=303)
     response.set_cookie(SESSION_COOKIE, _session_token(claims), max_age=SESSION_TTL_SECONDS, httponly=True,
-                        secure=_cookie_secure(request), samesite="lax", path="/")
-    response.delete_cookie(OAUTH_STATE_COOKIE, path="/", httponly=True, secure=_cookie_secure(request), samesite="lax")
+                        secure=_cookie_secure(request), samesite=_cookie_samesite(request), path="/")
+    response.delete_cookie(OAUTH_STATE_COOKIE, path="/", httponly=True, secure=_cookie_secure(request), samesite=_cookie_samesite(request))
     return response
 
 
@@ -1683,7 +1714,7 @@ async def google_login(body: GoogleLoginRequest, request: Request, response: Res
         con.commit()
     token = _session_token(claims)
     response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL_SECONDS, httponly=True,
-                        secure=_cookie_secure(request), samesite="lax", path="/")
+                        secure=_cookie_secure(request), samesite=_cookie_samesite(request), path="/")
     return {"ok": True, "authenticated": True, "user": _public_user(claims), "is_owner": _is_owner(claims)}
 
 
@@ -1699,9 +1730,9 @@ async def auth_me(request: Request) -> dict[str, Any]:
 async def auth_logout(request: Request, response: Response) -> dict[str, bool]:
     _require_same_origin(request)
     response.delete_cookie(SESSION_COOKIE, path="/", httponly=True,
-                          secure=_cookie_secure(request), samesite="lax")
+                          secure=_cookie_secure(request), samesite=_cookie_samesite(request))
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/", httponly=True,
-                          secure=_cookie_secure(request), samesite="lax")
+                          secure=_cookie_secure(request), samesite=_cookie_samesite(request))
     return {"ok": True}
 
 
@@ -1851,7 +1882,7 @@ async def admin_config_status(request: Request) -> dict[str, Any]:
     return {
         "app_version": APP_VERSION,
         "beta_readiness": {"ready": all(checks.values()), "checks": checks,
-                           "message": "필수 설정이 모두 연결되어야 비공개 베타를 시작할 수 있습니다."},
+                           "message": "표시 항목은 2.0 Beta Test 운영환경의 연결 상태입니다. 실제 테스터에게 제공하기 전에 필요한 항목을 구성하고 확인하세요."},
         "providers": {
             "data_go_kr": {"configured": bool(DATA_GO_KEY), "secret_values_returned": False,
                            "bus_route_api": "BusRoute/getBusRoute", "rail_operations": [TAGO_TRAIN_OP_CITY_CODES, TAGO_TRAIN_OP_STATIONS, TAGO_TRAIN_OP_TIMETABLE], "rail_service": TAGO_TRAIN_SERVICE_NAME},

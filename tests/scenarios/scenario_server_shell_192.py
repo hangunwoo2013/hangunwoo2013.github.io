@@ -25,17 +25,20 @@ with TestClient(app) as client:
     assert home.status_code == 200
     assert "B-ROUTE" in home.text and "프로젝트" in home.text
     manifest = client.get("/manifest.json")
-    assert manifest.status_code == 200 and "2.0.0-beta.1" in manifest.text
+    assert manifest.status_code == 200 and "2.0.0-beta.2" in manifest.text
     health = client.get("/api/health")
     assert health.status_code == 200, health.text
-    assert health.json()["version"] == "2.0.0-beta.1"
+    assert health.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+    assert health.json()["version"] == "2.0.0-beta.2"
     assert health.json()["readiness"]["beta_ready"] is False
     assert health.json()["readiness"]["checks"]["release_gate_approved"] is False
     auth = client.get("/api/auth/config")
     assert auth.status_code == 200
     assert auth.json()["google_signin_enabled"] is True
+    config = client.get("/broute-config.js")
+    assert config.status_code == 200 and "apiBaseUrl" in config.text
     admin = client.get("/admin.html")
-    assert admin.status_code == 200 and "B-ROUTE 2.0.0-beta.1" in admin.text
+    assert admin.status_code == 200 and "B-ROUTE 2.0.0-beta.2" in admin.text
     # Local development must not publish dotfiles or project source files.
     assert client.get("/.env").status_code == 404
     assert client.get("/server.py").status_code == 404
@@ -51,4 +54,4 @@ with TestClient(app) as client:
     assert status.status_code == 200, status.text
     assert status.json()["beta_readiness"]["checks"] == health.json()["readiness"]["checks"]
 
-print("PASS: single-origin frontend/API mount, static assets, 2.0 Beta health, protected routes and consistent beta readiness")
+print("PASS: single-origin frontend/API mount, API config static asset, 2.0 Beta health, protected routes and consistent beta readiness")

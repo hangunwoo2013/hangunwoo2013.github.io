@@ -1,49 +1,48 @@
-# B-ROUTE 2.0.0-beta.1 테스트 보고서
+# B-ROUTE 2.0.0-beta.1 소스 검증 보고서
 
-- 기준 코드: 1.95.1 Email Delivery Hotfix
-- 버전: 2.0.0-beta.1
-- 테스트 유형: 로컬 코드/통합 회귀 및 HTTP smoke
-- 실제 배포: 미실행
+- 기준 코드: B-ROUTE 1.95.1 Email Delivery Hotfix
+- 버전: `2.0.0-beta.1`
+- 검증 목적: 정식 공개 전 피드백을 위한 2.0 Beta Test 단계에 들어가기 전, 로컬 소스 수준에서 확인 가능한 사항 점검
+- 외부 API 호출 및 실제 서비스 배포: 수행하지 않음 (이번 검증 범위 아님)
 
-## 통과한 검사
+## 통과 결과
 
 | 검사 | 결과 |
 |---|---:|
 | `python -m pytest -q` | 1 passed |
-| 독립 회귀 시나리오 | 10 / 10 passed |
-| Python 3.11 문법 호환성 및 compileall | 통과 |
-| Node.js inline JavaScript / service worker 구문 | 통과 (Node v22.16.0) |
-| HTML ID 중복 및 JavaScript DOM 참조 | 통과 · index 95개 ID / admin 63개 ID |
+| `python scripts/run_regression.py` | 10 / 10 isolated scenarios passed |
+| 독립 회귀 반복 실행 | 연속 2회 통과 |
+| Python compileall / Python 3.11 문법 | 통과 |
+| Node.js inline JS / service worker 구문 | 통과 (Node v22.16.0) |
+| HTML ID 중복 및 literal DOM 참조 | 통과 (index 95개 ID, admin 63개 ID) |
 | GitHub Actions YAML 및 내장 Bash | 3개 workflow 통과 |
-| API/웹/관리자/manifest/service worker HTTP smoke | 통과 |
-| dotfile 및 서버 소스 정적 파일 노출 | 404 차단 확인 |
-| GTFS Worker heartbeat version | API runtime version과 일치 확인 |
-| Beta release/deploy/public access gate | 기본 승인·익명 접근 비활성화 확인 |
-| manifest JSON / ZIP 무결성 | 통과 |
+| 버전 메타데이터 / Secret 파일 검사 | 통과 |
+| TestClient 기반 웹/API 통합 회귀 | 통과 |
+| 합성 GTFS / 철도 환승 / OIDC / 프로젝트 / 초대 / webhook | 통과 |
+| ZIP 무결성 | 통과 |
 
-## HTTP smoke 핵심 결과
+## 발견 및 수정한 검사 실행 문제
 
-- `/`, `/manifest.json`, `/icon.svg`, `/sw.js`, `/admin.html`, `/api/health`, `/api/auth/config`: HTTP 200
-- `/.env`, `/server.py`, `/cloud-functions/api/index.py`: HTTP 404
-- `/api/health` version: `2.0.0-beta.1`
-- 기본 `BETA_RELEASE_APPROVED=false`일 때 `readiness.beta_ready=false`
-- 검사용 빈 데이터베이스에는 GTFS feed가 없어 `features.gtfs_routing=false`
+최초 1.95.1 ZIP 재검사에서 `scenario_email_delivery_webhook_195.py`가 `from server import app`을 실행할 때 `ModuleNotFoundError: No module named 'server'`로 실패했습니다. 회귀 실행기가 하위 프로세스 `PYTHONPATH`에 `cloud-functions`만 추가하고 프로젝트 루트는 추가하지 않는 문제였습니다.
 
-## 아직 통과했다고 볼 수 없는 항목
+`scripts/run_regression.py`의 하위 프로세스 환경에 프로젝트 루트와 `cloud-functions`를 모두 전달하도록 수정했습니다. 이후 1.95.1 작업본과 2.0.0-beta.1 패키지에서 전체 `pytest` 및 10개 독립 시나리오를 다시 실행해 통과를 확인했습니다.
 
-- Docker Engine이 없는 현재 환경에서 app/worker 컨테이너 이미지 빌드 미실행
-- GitHub Actions 원격 CI 실행 미실행
-- Cloud Run 및 Secret Manager 실제 배포/권한 확인 미실행
-- Google/Naver/Microsoft 실계정 OAuth 미검증
-- Resend DNS 인증, 실제 초대 메일 발송 및 실제 webhook 전달 미검증
-- 운영 PostgreSQL, 백업/복구 및 Tencent COS 실제 업로드/다운로드 미검증
-- 지역별 실제 GTFS 출처/라이선스/시간표 정확성과 전국 커버리지 미검증
-- GTFS Worker의 별도 Cloud Run Job 배포, 실행 트리거 및 운영 권한 미검증
-- 모바일/PC 실기기 및 외부 테스터 피드백 미수집
-- 운영 비용 알림/상한과 무료 할당량 초과 자동 결제 방지 미검증
+## 이번 단계에서 수행하지 않은 항목
+
+다음은 실패가 아니라 이번 소스 검증 범위에서 의도적으로 제외한 작업입니다.
+
+- 실제 공공데이터포털/TAGO/Kakao/Photon 외부 API 호출 및 실제 API 키 사용
+- Google/Naver/Microsoft 실계정 OAuth
+- Resend 실제 메일/웹훅 수신
+- 운영 PostgreSQL / COS 연결
+- 실제 전국 GTFS 수집, 라이선스 및 시간표 정확성 확인
+- Cloud Run 배포, 원격 GitHub Actions 실행, 실제 트래픽/롤백
+- 실기기 테스트 및 테스터 피드백 수집
+
+Docker CLI/Engine이 이 실행 환경에 설치되어 있지 않아 이미지 빌드는 실행하지 않았습니다.
 
 ## 판정
 
-**로컬 회귀검사 통과 / 외부 베타 배포 보류.**
+**로컬 소스 검사 통과. 2.0 Beta Test 단계로 진행 가능.**
 
-이 결과는 코드와 모의 데이터 기반 기능의 테스트 통과를 뜻한다. 실제 전국 교통 경로가 완성되었다거나 실서비스 운영이 검증되었다는 의미는 아니다. 특히 부산 외 테스터에게 실제 경로 검색을 제공하기 전, 그 지역의 시간표 데이터가 등록·활성화되어 있어야 한다.
+이 판정은 API 연결이나 실제 전국 경로 검색이 완료되었다는 의미가 아닙니다. 실제 API 연동 및 비공개 베타 테스터 제공은 2.0 Beta Test 단계의 다음 작업으로 진행합니다.

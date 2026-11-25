@@ -52,6 +52,7 @@ def check_frontend_syntax() -> None:
                 script_file.write_text(block, encoding="utf-8")
                 run(["node", "--check", str(script_file)])
         run(["node", "--check", str(ROOT / "sw.js")])
+        run(["node", "--check", str(ROOT / "broute-config.js")])
 
 
 class IdCollector(HTMLParser):
@@ -107,16 +108,16 @@ def check_workflow_yaml() -> None:
 
 
 def check_release_metadata() -> None:
-    expected = "2.0.0-beta.1"
+    expected = "2.0.0-beta.2"
     if (ROOT / "VERSION").read_text(encoding="utf-8").strip() != expected:
         raise AssertionError("VERSION file does not match the candidate release")
     checks = {
         "cloud-functions/api/index.py": 'version=APP_VERSION',
         "server.py": 'version=api_module.APP_VERSION',
-        "index.html": "B-ROUTE 2.0.0-beta.1",
-        "admin.html": "B-ROUTE 2.0.0-beta.1",
+        "index.html": "B-ROUTE 2.0.0-beta.2",
+        "admin.html": "B-ROUTE 2.0.0-beta.2",
         "manifest.json": expected,
-        "sw.js": "broute-shell-2-0-beta-1",
+        "sw.js": "broute-shell-2-0-beta-2",
     }
     for relative, token in checks.items():
         data = (ROOT / relative).read_text(encoding="utf-8")
@@ -124,6 +125,34 @@ def check_release_metadata() -> None:
             raise AssertionError(f"Release version marker mismatch: {relative} missing {token!r}")
     frontend = (ROOT / "index.html").read_text(encoding="utf-8")
     backend = (ROOT / "cloud-functions" / "api" / "index.py").read_text(encoding="utf-8")
+    # Browser map requests must retain the origin Referer and use the canonical OSM endpoint.
+    if '<meta name="referrer" content="no-referrer">' in frontend:
+        raise AssertionError("The frontend must not suppress Referer for OSM tile requests")
+    if 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' not in frontend:
+        raise AssertionError("The canonical OpenStreetMap tile URL is required")
+    if 'https://{s}.tile.openstreetmap.org/' in frontend:
+        raise AssertionError("Use the canonical OSM tile hostname, not subdomain rotation")
+    if "osm.on('tileerror'" not in frontend or "setMapType('terrain',false)" not in frontend or "osmTileSuccesses*2+4" not in frontend:
+        raise AssertionError("The standard-map tile failure fallback is missing")
+    browser_config = (ROOT / "broute-config.js").read_text(encoding="utf-8")
+    if "apiBaseUrl" not in browser_config or "DATA_GO_KR_SERVICE_KEY" in browser_config or "KAKAO_REST_API_KEY" in browser_config:
+        raise AssertionError("Browser config must expose only the API origin, never provider secrets")
+    if "./broute-config.js" not in frontend or "./broute-config.js" not in (ROOT / "admin.html").read_text(encoding="utf-8"):
+        raise AssertionError("Both the main and admin pages must load the public API config")
+    if "APP_ALLOWED_ORIGINS" not in (ROOT / ".env.example").read_text(encoding="utf-8") or "SESSION_COOKIE_SAMESITE" not in (ROOT / ".env.example").read_text(encoding="utf-8"):
+        raise AssertionError("Split-hosting CORS and cookie settings must be documented in .env.example")
+    if "CORSMiddleware" not in backend or "APP_ALLOWED_ORIGINS" not in backend:
+        raise AssertionError("Backend explicit-origin CORS support is missing")
+    if 'response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")' not in backend:
+        raise AssertionError("Backend response Referrer-Policy must preserve origin Referer for tile providers")
+    deploy = (ROOT / ".github/workflows/deploy-cloud-run.yml").read_text(encoding="utf-8")
+    for setting in ("APP_ALLOWED_ORIGINS", "SESSION_COOKIE_SAMESITE", "API_PUBLIC_ORIGIN"):
+        if setting not in (ROOT / ".github/workflows/deploy-cloud-run.yml").read_text(encoding="utf-8"):
+            raise AssertionError(f"Cloud Run deployment config is missing {setting}")
+    if "broute-config.js" not in (ROOT / "server.py").read_text(encoding="utf-8"):
+        raise AssertionError("Local server allowlist must serve broute-config.js")
+    if "broute-config.js" not in (ROOT / "Dockerfile").read_text(encoding="utf-8"):
+        raise AssertionError("Cloud Run image must include broute-config.js")
     if "hashParams.get('invite')||queryParams.get('invite')" not in frontend:
         raise AssertionError("Email invitation fragment parser is missing")
     if "api('/project-invites/preview'" not in frontend or "api('/project-invites/accept'" not in frontend:
@@ -157,7 +186,7 @@ def check_release_metadata() -> None:
             raise AssertionError(f"Cloud Run deploy does not pass invitation setting: {env_name}")
     if "if: vars.GTFS_WORKER_IMAGE_BUILD_ENABLED == 'true'" not in deploy:
         raise AssertionError("GTFS worker image build must require explicit opt-in")
-    if "APP_VERSION=2.0.0-beta.1" not in env_example:
+    if "APP_VERSION=2.0.0-beta.2" not in env_example:
         raise AssertionError("The beta runtime version must be explicit in .env.example")
     if "BETA_RELEASE_APPROVED=false" not in env_example:
         raise AssertionError("The beta release gate must remain disabled by default")
@@ -171,7 +200,7 @@ def check_release_metadata() -> None:
     if 'api.APP_VERSION' not in worker or '"1.94.0"' in worker:
         raise AssertionError("GTFS worker heartbeat version must match the API runtime version")
     version_source = (ROOT / "cloud-functions" / "api" / "index.py").read_text(encoding="utf-8")
-    if 'APP_VERSION = os.getenv("APP_VERSION", "2.0.0-beta.1")' not in version_source:
+    if 'APP_VERSION = os.getenv("APP_VERSION", "2.0.0-beta.2")' not in version_source:
         raise AssertionError("The API runtime version source is missing")
     app_dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     worker_dockerfile = (ROOT / "workers" / "Dockerfile").read_text(encoding="utf-8")
@@ -189,7 +218,7 @@ def run_scenarios() -> None:
     if not scenarios:
         raise AssertionError("No regression scenarios found")
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(ROOT / "cloud-functions") + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join([str(ROOT), str(ROOT / "cloud-functions"), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
     for scenario in scenarios:
         run([PYTHON, str(scenario)], env=env)
     print(f"\n[PASS] {len(scenarios)} isolated regression scenarios")
@@ -203,7 +232,7 @@ def main() -> int:
     check_workflow_yaml()
     check_release_metadata()
     run_scenarios()
-    print("\nB-ROUTE 2.0.0-beta.1 LOCAL CI: ALL CHECKS PASSED")
+    print("\nB-ROUTE 2.0.0-beta.2 LOCAL CI: ALL CHECKS PASSED")
     print("Container image builds are executed by GitHub Actions; run locally only when Docker is installed.")
     return 0
 

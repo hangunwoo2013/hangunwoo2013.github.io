@@ -135,7 +135,7 @@ assert json.loads(preview_repeat.request.content)["token"] == token
 assert owner.get(f"/project-invites/{token}").status_code == 200
 assert preview.json()["mailbox_proof"] == "one_time_email_link"
 assert preview.headers.get("cache-control") == "no-store, max-age=0"
-assert preview.headers.get("referrer-policy") == "no-referrer"
+assert preview.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
 assert owner.get(f"/projects/{project_id}/members").json()["members"] == [
     {"user_sub": "owner-google-sub", "email": "owner@example.com", "role": "owner", "joined_at": owner.get(f"/projects/{project_id}/members").json()["members"][0]["joined_at"]}
 ]
